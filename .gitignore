@@ -1,0 +1,14 @@
+# Umbra runtime / engagement state — NEVER commit. Contains target scope,
+# scan reports, and per-project memory that are specific to a live engagement.
+.umbra/
+
+# Node / tooling
+node_modules/
+npm-debug.log*
+.DS_Store
+
+# Local editor / env
+.env
+.env.*
+.idea/
+.vscode/

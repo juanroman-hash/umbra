@@ -1,0 +1,15 @@
+{
+  "name": "umbra",
+  "description": "Umbra — autonomous, authorization-gated, multi-agent penetration testing for Claude Code.",
+  "owner": {
+    "name": "mushhzz",
+    "url": "https://github.com/mushhzz"
+  },
+  "plugins": [
+    {
+      "name": "umbra",
+      "source": ".",
+      "description": "Umbra — autonomous, authorization-gated, multi-agent penetration testing for Claude Code (Kali network track + agent-browser web track, behind a scope allowlist and egress-locked sandbox)."
+    }
+  ]
+}

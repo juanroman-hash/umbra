@@ -1,0 +1,27 @@
+{
+  "name": "umbra",
+  "version": "0.1.0",
+  "description": "Umbra — autonomous, authorization-gated, multi-agent penetration testing for Claude Code. Recon-first orchestration across a Kali network track and an agent-browser web track; all offensive tooling runs inside a disposable, egress-locked sandbox behind an explicit scope allowlist.",
+  "author": { "name": "mushhzz" },
+  "homepage": "https://github.com/mushhzz/umbra",
+  "repository": "https://github.com/mushhzz/umbra",
+  "license": "MIT",
+  "keywords": ["security", "pentest", "penetration-testing", "offensive-security", "sandbox", "kali"],
+  "agents": [
+    "./agents/adviser.md",
+    "./agents/assistant.md",
+    "./agents/coder.md",
+    "./agents/enricher.md",
+    "./agents/generator.md",
+    "./agents/installer.md",
+    "./agents/memorist.md",
+    "./agents/orchestrator.md",
+    "./agents/pentester.md",
+    "./agents/refiner.md",
+    "./agents/reflector.md",
+    "./agents/reporter.md",
+    "./agents/searcher.md",
+    "./agents/summarizer.md",
+    "./agents/verifier.md"
+  ]
+}

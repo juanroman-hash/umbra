@@ -1,0 +1,157 @@
+# Umbra
+
+**Umbra** is a Claude Code **plugin** for autonomous, authorization-gated penetration
+testing. A recon-first orchestration engine fingerprints and classifies each target,
+fans a roster of specialist agents out across two execution tracks, adversarially
+verifies every finding, and writes a report — all behind hard guardrails (an explicit
+scope allowlist and a disposable, egress-locked sandbox).
+
+> ⚠️ **Authorized testing only.** Umbra runs real offensive tooling. Only point it at
+> systems you own or have **explicit written authorization** to test. You are responsible
+> for staying within that authorization and the law.
+
+## Install
+
+Umbra installs as a Claude Code plugin from this repo's marketplace. **In Claude Code:**
+
+```text
+/plugin marketplace add mushhzz/umbra
+/plugin install umbra@umbra
+```
+
+…or from your shell (non-interactive):
+
+```bash
+claude plugin marketplace add mushhzz/umbra
+claude plugin install umbra@umbra
+```
+
+`umbra@umbra` is `<plugin>@<marketplace>` — both are named `umbra` here. To update later:
+`/plugin marketplace update umbra`.
+
+### Prerequisites
+
+- **Docker** — the network/host track runs entirely inside a disposable Kali container
+  (`scripts/sandbox.sh`). Docker must be installed and running.
+- **[`agent-browser`](https://www.npmjs.com/package/agent-browser) CLI** (optional) — only
+  needed for the web track (DOM/HTTP testing). The network track does not require it.
+
+The scope-gate hook and the sandbox script are shipped with the plugin and referenced via
+`${CLAUDE_PLUGIN_ROOT}`, so they work from wherever Claude Code installs the plugin — no
+manual path setup.
+
+## Two execution tracks
+
+Umbra tests **any** target, not just web apps. Recon classifies each in-scope target and
+the pentester picks the track per objective:
+
+- **Network / host track — Kali Docker sandbox.** All host/service/network tooling
+  (`nmap`, service enumeration, `sqlmap`, `hydra`, `nikto`, `gobuster`, `netcat`,
+  `searchsploit`, Metasploit if installed) runs *inside* a disposable Kali container via
+  `scripts/sandbox.sh exec` — never on your host. The container runs on its own bridge
+  with **egress firewalled to the in-scope allowlist only**.
+- **Web track — `agent-browser` CLI.** Stateful, per-`--session` browser automation for
+  web/DOM/HTTP testing: in-page `fetch()` for same-origin authenticated API abuse, and
+  `open`/`snapshot`/`click`/`fill` for client-side behavior. `agent-browser` is web-only.
+
+## The engagement flow (`workflows/engagement.js`)
+
+```mermaid
+flowchart TD
+    A([/pentest target]) --> G{Authorization gate}
+    G -->|"no scope / no auth"| STOP([Refuse])
+    G -->|"scope.txt + authz + sandbox up"| M[memorist: read prior guides]
+
+    M --> R["recon: fingerprint + classify each target<br/>(web vs host) + inventory components/versions"]
+    R --> C["searcher: CVE enrichment<br/>version → affected-CVE → PoC, RoE-classified"]
+    C --> P[generator: decompose objective into finding-based subtasks]
+
+    P --> LOOP{{Round loop · up to maxRounds}}
+    LOOP --> X[exploit: parallel solvers, right track per subtask]
+    X --> V[verifier: adversarially reproduce each claim]
+    V --> RF{refiner: done?}
+    RF -->|"more to test — adapt next round"| LOOP
+    RF -->|"dry / objective met"| REP[reporter: verified findings only]
+
+    REP --> W[memorist: persist an anonymized guide]
+    W --> OUT([Report + memory])
+
+    classDef gate fill:#3b0a0a,stroke:#e05252,color:#fff;
+    classDef work fill:#1f2933,stroke:#7aa2c2,color:#fff;
+    classDef done fill:#0a2e1a,stroke:#4caf7d,color:#fff;
+    class G,STOP gate;
+    class M,R,C,P,X,V,REP,W work;
+    class OUT,LOOP,RF done;
+```
+
+The `exploit → verify → refine` core is an adaptive loop: each round's verified findings and
+dead ends steer the refiner, which rewrites the next round's subtasks and stops when the work
+goes dry. See **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** for the full set of diagrams
+(two tracks, defense-in-depth guardrails, agent roster, CVE enrichment, per-round sequence,
+and the structured-data handoff between stages).
+
+Workflow agents run as `general-purpose` with their specialist role carried inline in the
+prompt (the workflow engine can't spawn plugin agent types); the durable `agents/*.md`
+definitions are used via the Task tool and after `/reload-plugins`.
+
+## Agent roster (`agents/*.md`)
+
+- **Workers:** `pentester`, `coder`, `installer`, `searcher`
+- **Planners:** `generator` (decompose), `refiner` (adapt)
+- **Memory / knowledge:** `memorist` (recall), `summarizer` (compress)
+- **Supervision:** `verifier` (adversarial finding confirmation), `reflector` (tool-call
+  barrier enforcer), `adviser` (mentor), `enricher` (context for the adviser)
+- **Reporting / control:** `reporter`, `orchestrator`, `assistant` (human steering)
+
+The `orchestrator` and `reporter` roles are also surfaced as skills
+(`pentest-orchestration`, `pentest-reporting`) for driving an engagement by hand.
+
+## CVE enrichment
+
+Recon inventories every fingerprinted component + version (flagging EOL/outdated ones). A
+`searcher` stage resolves affected CVEs and public PoCs — **CVE web lookups run host-side**
+(the sandbox egress is target-locked), `searchsploit` runs inside the sandbox — and checks
+whether the *detected* version is actually affected. Each CVE is classified `roeSafe`: only
+non-destructive proofs are attempted; crash/DoS/memory-corruption classes stay research-only.
+
+## Guardrails — load-bearing, do not remove
+
+1. **Scope gate** (`hooks/scope-gate.sh`, PreToolUse) — **default-deny**: a known network
+   binary aimed at anything not in `.umbra/scope.txt` (including bare single-label hosts,
+   IPv6 literals, and `-iL` file lists) is blocked before it runs.
+2. **Egress-locked sandbox** (`scripts/sandbox.sh`) — the container's outbound firewall is
+   seeded from `.umbra/scope.txt`, so even a mistaken command can't reach out of scope.
+
+These enforce authorization mechanically, but they do not replace it: **only test systems
+you are authorized to test**, and establish written authorization + the scope allowlist first.
+
+## Usage
+
+Once the plugin is installed (see [Install](#install)) and Docker is running, start an
+engagement from Claude Code:
+
+```text
+/pentest app.example.com
+```
+
+The `/pentest` command **gates on authorization first**: it confirms you're authorized,
+writes your allowlist to `.umbra/scope.txt` (one host/CIDR per line, in your project
+directory), and brings the egress-locked Kali sandbox up — then runs the recon → exploit →
+verify → refine → report flow. `.umbra/` (scope, reports, memory) is created in your working
+directory and is per-project runtime state — keep it out of version control.
+
+If you'd rather set scope by hand before running:
+
+```bash
+mkdir -p .umbra
+printf 'app.example.com\n' > .umbra/scope.txt   # one authorized host/CIDR per line
+```
+
+You can also drive an engagement manually with the `pentest-orchestration` and
+`pentest-reporting` skills instead of the workflow.
+
+## Environment knobs (sandbox)
+
+`UMBRA_SANDBOX_BASE` (base image), `UMBRA_SANDBOX_HEAVY=1` (add Metasploit),
+`UMBRA_SANDBOX_EGRESS=off` (disable the egress lock), `UMBRA_SANDBOX_CAPS=NET_RAW`
+(for `nmap -sS`), `UMBRA_SANDBOX_MEMORY`, `UMBRA_SANDBOX_PIDS`.

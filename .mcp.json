@@ -1,0 +1,4 @@
+{
+  "mcpServers": {},
+  "_note": "No MCP servers are required. The two execution tracks are both non-MCP: (1) NETWORK/HOST testing runs inside the Kali Docker sandbox via `scripts/sandbox.sh exec \"<cmd>\"` (nmap, sqlmap, nikto, gobuster, netcat, exploitdb, etc.) — never on the host; (2) WEB/browser testing is driven by the `agent-browser` host CLI (see agents/pentester.md → 'Web application / browser testing'), which is stateful and token-light (accessibility-tree snapshots with @eN refs). agent-browser is the web browser tool, not a general pentest tool — use the Kali sandbox for any non-web host. If you prefer an MCP-based browser instead, add a Playwright MCP entry here, but the flow is authored around agent-browser."
+}
