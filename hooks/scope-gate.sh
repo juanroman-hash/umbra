@@ -22,8 +22,12 @@
 #     refused outright: their contents cannot be scope-checked inline.
 #   * Loopback / localhost is always permitted (agent-browser + sandbox reach it).
 #
-# Non-network commands with no detectable target (e.g. `ls`, `cat`) are allowed.
-# Any dotted host / IP / URL out of scope is blocked regardless of the binary.
+# Enforcement is scoped to commands that invoke a known network binary. A command
+# with none (git, build tools, `ls`, `cat`, ...) is allowed unconditionally — the
+# gate does not try to parse hosts out of it, which previously mis-flagged dev
+# tokens like `.gitignore` / `a..HEAD` / `Package.swift` and blocked plain git.
+# The sandbox's egress firewall is the independent packet-level backstop for any
+# network attempt made through a binary this list does not recognize.
 #
 # Expected behaviour (inline test cases):
 #   nmap stagingbox                 -> ALLOW  (stagingbox in scope, single-label)
@@ -93,12 +97,23 @@ if [ ${#TOKENS[@]} -gt 0 ]; then
   done
 fi
 
+# No known network binary => nothing for the scope gate to enforce. The gate
+# exists to keep network TOOLING on-scope; ordinary commands (git, build tools,
+# file ops) are outside its remit and must never be blocked by target
+# look-alikes such as ".gitignore", "a..HEAD", or "Package.swift". Extracting
+# and scope-checking targets from non-network commands produced constant false
+# positives (blocked plain `git commit`). The sandbox's egress firewall remains
+# the independent packet-level backstop for anything that dodges this list.
+if [ -z "$net_bin" ]; then
+  exit 0
+fi
+
 # Local-file extensions that are NOT valid TLDs. A schemeless dotted token that
 # ends in one of these is a filename operand (notes.txt, wordlist.json), not a
 # host, so it is NOT treated as a network target. Real ccTLD/gTLD suffixes
 # (.sh, .md, .io, .app, .dev, .com, ...) are deliberately absent, so a genuine
 # out-of-scope host such as `curl http://evil.sh` is still enforced.
-FILE_EXTS=" txt log json yaml yml conf cfg ini csv tsv pcap bak tmp lock sql out html htm css xml toml env pem key crt gz tgz tar bz2 xz zip db sqlite dat bin so class jar war sh py js ts rb pl go rs php md yaml "
+FILE_EXTS=" txt log json yaml yml conf cfg ini csv tsv pcap bak tmp lock sql out html htm css xml toml env pem key crt gz tgz tar bz2 xz zip db sqlite dat bin so class jar war sh py js ts rb pl go rs php md yaml swift kt kts java scala cpp cxx hpp hxx gradle tsx jsx vue svelte dart ipynb mm "
 
 # ---------------------------------------------------------------------------
 # (a) IPv4 + URL-host extraction (existing logic). URL hosts are captured via
