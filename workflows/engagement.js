@@ -53,9 +53,14 @@ const BOUNTY_ROE = !bounty ? '' :
   `${bExclude ? ` (explicitly OUT of scope: ${bExclude})` : ''}. A redirect or link to an out-of-scope host is OUT OF ` +
   `BOUNDS — do not follow it. When unsure whether something is in scope, treat it as out of scope and stop.\n` +
   (bHandle
-    ? `- ATTRIBUTION: put the header "${bHeader}: ${bHandle}" on EVERY HTTP request — curl -H "${bHeader}: ${bHandle}", ` +
-      `agent-browser in-page fetch() headers, and any tool that accepts custom headers. If a tool cannot set it, say so ` +
-      `rather than sending unattributed traffic.\n`
+    ? (/^user-?agent$/i.test(bHeader)
+        ? `- ATTRIBUTION (User-Agent): set the HTTP User-Agent to "${bHandle}" on EVERY request — curl -A "${bHandle}", ` +
+          `nmap --script-args http.useragent="${bHandle}", sqlmap --user-agent="${bHandle}", and agent-browser's ` +
+          `user-agent option / in-page fetch. Some programs IP-block traffic missing this UA, so never send a request ` +
+          `without it; if a tool cannot set it, say so instead.\n`
+        : `- ATTRIBUTION (header): put "${bHeader}: ${bHandle}" on EVERY HTTP request — curl -H "${bHeader}: ${bHandle}", ` +
+          `agent-browser in-page fetch() headers, and any tool that accepts custom headers. If a tool cannot set it, say so ` +
+          `rather than sending unattributed traffic.\n`)
     : `- ATTRIBUTION: no researcher handle configured — set bounty.handle so all traffic is attributable before testing.\n`) +
   `- BANNED TOOLING (never run): brute-force (hydra/medusa/patator/ncrack), high-volume scanners (masscan, ` +
   `nmap -T5 / --min-rate), sqlmap above \`--level 1 --risk 1\`, and any DoS / stress / high-volume fuzzing` +
