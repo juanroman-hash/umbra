@@ -80,42 +80,47 @@ flowchart LR
 
 ---
 
-## 3. Guardrails — defense in depth
+## 3. Guardrails — the egress-locked sandbox
 
-Two **independent** controls enforce scope: a PreToolUse hook blocks the *command*, and the
-sandbox's egress firewall blocks the *packet*. Either alone would suffice; together a mistake
-has to defeat both.
+Scope is enforced at the **packet level**, inside the sandbox. All network/host tooling runs
+inside a disposable Kali container whose outbound firewall is seeded from `.umbra/scope.txt`,
+so a command aimed out of scope is dropped at egress regardless of what the command was.
+Umbra installs **no global Claude Code hook** — it never intercepts the operator's shell
+outside an engagement.
 
 ```mermaid
 flowchart TD
-    CMD[Agent issues a Bash command] --> HOOK{{scope-gate.sh — PreToolUse hook}}
+    subgraph HOST[Host]
+      A[Authorization + .umbra/scope.txt] --> UP["scripts/sandbox.sh up<br/>seed iptables egress from scope.txt"]
+      WEB["WEB track: agent-browser (host-side)"]
+    end
 
-    HOOK --> NB{Known network binary?<br/>nmap/curl/hydra/ssh/...}
-    NB -->|no network binary, no target| ALLOW1([ALLOW])
-    NB -->|yes| TGT{Extract targets<br/>FQDN / IPv4 / IPv6 / bare host / URL}
+    subgraph BOX[Disposable Kali sandbox · own bridge · cap-drop=ALL · no-new-privileges · pids/mem limits]
+      TOOL["network/host tooling<br/>nmap / sqlmap / hydra / nikto / …"] --> FW{{iptables egress<br/>default-deny, allow = scope.txt}}
+      FW -->|"dst in scope"| NET([packet leaves to target])
+      FW -->|"dst out of scope"| DROP([DROP / REJECT])
+    end
 
-    TGT -->|"-iL / -iR file-list"| DENY1([DENY — cannot scope-check a file])
-    TGT -->|no resolvable target| DENY2([DENY — default-deny])
-    TGT --> SC{All targets in .umbra/scope.txt<br/>or loopback?}
-    SC -->|no| DENY3([DENY — out of scope])
-    SC -->|yes| ALLOW2([ALLOW])
-
-    ALLOW2 --> EXEC[Command runs]
-    EXEC --> INSANDBOX{Runs inside Kali sandbox?}
-    INSANDBOX -->|yes| FW{{iptables egress — seeded from scope.txt}}
-    FW -->|"dst in scope"| NET([Packet leaves to target])
-    FW -->|"dst out of scope"| DROP([DROP / REJECT])
+    UP --> FW
+    WEB -.->|"no packet-level lock —<br/>bound by authorization + allowlist"| AUTHZ([operator/agent keeps to scope])
 
     classDef deny fill:#3b0a0a,stroke:#e05252,color:#fff;
     classDef allow fill:#0a2e1a,stroke:#4caf7d,color:#fff;
     classDef gate fill:#1f2933,stroke:#7aa2c2,color:#fff;
-    class DENY1,DENY2,DENY3,DROP deny;
-    class ALLOW1,ALLOW2,NET allow;
-    class HOOK,FW,NB,TGT,SC,INSANDBOX gate;
+    class DROP deny;
+    class NET allow;
+    class FW,UP,TOOL gate;
+    class AUTHZ,WEB deny;
 ```
 
-The sandbox itself is a disposable Kali container: own bridge network, `--cap-drop=ALL`,
+The sandbox is a disposable Kali container: own bridge network, `--cap-drop=ALL`,
 `--security-opt no-new-privileges`, `--pids-limit`, `--memory`, and egress default-deny.
+
+**Scope of the guarantee.** The egress lock covers the **network/host track** (everything run
+via `sandbox.sh exec`). The **web track** (`agent-browser`) runs host-side and is *not* behind
+the container firewall, so on that track staying in scope depends on the agent honoring the
+allowlist — not on a packet filter. Keep `.umbra/scope.txt` tight and review web-track activity
+accordingly.
 
 ---
 

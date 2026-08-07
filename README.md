@@ -36,9 +36,9 @@ claude plugin install umbra@umbra
 - **[`agent-browser`](https://www.npmjs.com/package/agent-browser) CLI** (optional) — only
   needed for the web track (DOM/HTTP testing). The network track does not require it.
 
-The scope-gate hook and the sandbox script are shipped with the plugin and referenced via
-`${CLAUDE_PLUGIN_ROOT}`, so they work from wherever Claude Code installs the plugin — no
-manual path setup.
+The sandbox script ships with the plugin and is referenced via `${CLAUDE_PLUGIN_ROOT}`, so
+it works from wherever Claude Code installs the plugin — no manual path setup. Umbra installs
+**no global hooks**: it never intercepts your shell outside an engagement.
 
 ## Two execution tracks
 
@@ -87,7 +87,7 @@ flowchart TD
 The `exploit → verify → refine` core is an adaptive loop: each round's verified findings and
 dead ends steer the refiner, which rewrites the next round's subtasks and stops when the work
 goes dry. See **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** for the full set of diagrams
-(two tracks, defense-in-depth guardrails, agent roster, CVE enrichment, per-round sequence,
+(two tracks, the egress-locked sandbox, agent roster, CVE enrichment, per-round sequence,
 and the structured-data handoff between stages).
 
 Workflow agents run as `general-purpose` with their specialist role carried inline in the
@@ -114,16 +114,26 @@ Recon inventories every fingerprinted component + version (flagging EOL/outdated
 whether the *detected* version is actually affected. Each CVE is classified `roeSafe`: only
 non-destructive proofs are attempted; crash/DoS/memory-corruption classes stay research-only.
 
-## Guardrails — load-bearing, do not remove
+## Guardrails
 
-1. **Scope gate** (`hooks/scope-gate.sh`, PreToolUse) — **default-deny**: a known network
-   binary aimed at anything not in `.umbra/scope.txt` (including bare single-label hosts,
-   IPv6 literals, and `-iL` file lists) is blocked before it runs.
-2. **Egress-locked sandbox** (`scripts/sandbox.sh`) — the container's outbound firewall is
-   seeded from `.umbra/scope.txt`, so even a mistaken command can't reach out of scope.
+Scope is enforced **mechanically inside the sandbox** and **by authorization** everywhere:
 
-These enforce authorization mechanically, but they do not replace it: **only test systems
-you are authorized to test**, and establish written authorization + the scope allowlist first.
+1. **Egress-locked sandbox** (`scripts/sandbox.sh`) — the network/host track runs entirely
+   inside a disposable Kali container whose outbound firewall is seeded from `.umbra/scope.txt`.
+   All host/service tooling (`nmap`, `sqlmap`, `hydra`, …) runs there, so even a mistaken or
+   out-of-scope command physically cannot reach a host outside the allowlist — the packet is
+   dropped at the container's egress. This is the load-bearing control.
+2. **Scope allowlist + authorization** (`.umbra/scope.txt`) — you establish written
+   authorization and the allowlist before any engagement; `/pentest` gates on this first.
+
+> Umbra deliberately installs **no global Claude Code hook** — nothing intercepts your shell
+> outside an engagement. The consequence: the **web track** (`agent-browser`, which runs
+> host-side, *not* in the container) has no packet-level lock, so on that track staying in
+> scope is enforced by the agent honoring the allowlist, not by a firewall. Keep the allowlist
+> tight and review web-track activity accordingly.
+
+These controls do not replace authorization: **only test systems you are authorized to test**,
+and establish written authorization + the scope allowlist first.
 
 ## Usage
 

@@ -1,6 +1,6 @@
 {
   "name": "umbra",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Umbra — autonomous, authorization-gated, multi-agent penetration testing for Claude Code. Recon-first orchestration across a Kali network track and an agent-browser web track; all offensive tooling runs inside a disposable, egress-locked sandbox behind an explicit scope allowlist.",
   "author": { "name": "mushhzz" },
   "homepage": "https://github.com/mushhzz/umbra",
