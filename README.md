@@ -160,6 +160,39 @@ printf 'app.example.com\n' > .umbra/scope.txt   # one authorized host/CIDR per l
 You can also drive an engagement manually with the `pentest-orchestration` and
 `pentest-reporting` skills instead of the workflow.
 
+## Bug bounty mode
+
+`/pentest-bounty` runs an engagement under bug-bounty **Rules of Engagement** — for testing a
+program you are **enrolled in**. It tunes Umbra down to what bug-bounty programs actually allow:
+
+- **Attribution** — a configurable header (e.g. `X-Bug-Bounty: <handle>`) on every request.
+- **Banned tooling** — brute-force (`hydra`/`medusa`), high-volume scanners (`masscan`,
+  `nmap -T5`), aggressive `sqlmap`, and anything DoS/stress are off by default.
+- **Rate discipline + capped concurrency** — the parallel solver fan-out is chunked so it can't
+  exceed the program's rate limit.
+- **Strict scope + exclusions** — only the assets you list; out-of-scope redirects are refused.
+
+Set it up (all under your per-project `.umbra/`, which is gitignored):
+
+```bash
+cp examples/rules.md.example    .umbra/rules.md      # paste the program's full policy
+cp examples/bounty.env.example  .umbra/bounty.env    # handle, header, rate, exclusions
+printf 'app.example.com\n' >   .umbra/scope.txt      # ONLY explicitly in-scope hosts
+# in Claude Code:
+/pentest-bounty app.example.com
+```
+
+> **Authorization is yours to establish, and it is narrow.** A bug bounty authorizes *only* what
+> the program's policy says, *only* while you're enrolled. **Many programs prohibit automated
+> scanning entirely** — if yours does, Umbra must not be pointed at it. There is no public
+> program that authorizes a fully autonomous exploitation engine off the shelf; treat the policy
+> as the hard boundary. Note too that the **web track has no packet-level scope lock** (see
+> [Guardrails](#guardrails)), so scope discipline there rests on the agent honoring the allowlist.
+
+**Validate the profile first** against a target you own, or an explicitly-authorized host:
+`scanme.nmap.org` authorizes **nmap port-scanning only** (no exploits/DoS, ≤ ~a dozen scans/day) —
+enough to confirm attribution and rate-limiting behave before you touch a live program asset.
+
 ## Environment knobs (sandbox)
 
 `UMBRA_SANDBOX_BASE` (base image), `UMBRA_SANDBOX_HEAVY=1` (add Metasploit),

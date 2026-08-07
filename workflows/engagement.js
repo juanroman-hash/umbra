@@ -31,8 +31,46 @@ const PROJECT_DIR = (A.projectDir || A.cwd || '${CLAUDE_PROJECT_DIR}').replace(/
 const SANDBOX = `${PLUGIN_ROOT}/scripts/sandbox.sh`
 const MEM_DIR = `${PROJECT_DIR}/.umbra/memory`
 
+// ---------------- bug-bounty profile (optional) ----------------
+// Passed as A.bounty by commands/pentest-bounty.md. When present the engagement runs
+// under bug-bounty Rules of Engagement: attribution header on all HTTP, banned aggressive
+// tooling, a low request rate, tight scope + exclusions, and capped solver concurrency so
+// the parallel fan-out can't blow a program's rate limit.
+const bounty = (A.bounty && typeof A.bounty === 'object') ? A.bounty : null
+const bHeader = (bounty && bounty.header) || 'X-Bug-Bounty'
+const bHandle = (bounty && bounty.handle) || ''
+const bRps = (bounty && Number.isFinite(+bounty.rps) && +bounty.rps > 0) ? +bounty.rps : 2
+const bConc = (bounty && Number.isFinite(+bounty.concurrency) && +bounty.concurrency > 0) ? +bounty.concurrency : 2
+const bBanned = (bounty && bounty.bannedTools) || ''
+const bExclude = (bounty && bounty.exclude) || ''
+const bRulesFile = (bounty && bounty.rulesFile) || `${PROJECT_DIR}/.umbra/rules.md`
+
+const BOUNTY_ROE = !bounty ? '' :
+  `\n\n=== BUG-BOUNTY RULES OF ENGAGEMENT (BINDING — overrides any speed/aggression guidance) ===\n` +
+  `This is a LIVE third-party bug-bounty program. Your ONLY authorization is the program policy in ` +
+  `${bRulesFile} plus the scope allowlist. Read ${bRulesFile} FIRST and treat every rule there as a hard constraint.\n` +
+  `- SCOPE: touch only hosts explicitly in scope. Honor ALL exclusions` +
+  `${bExclude ? ` (explicitly OUT of scope: ${bExclude})` : ''}. A redirect or link to an out-of-scope host is OUT OF ` +
+  `BOUNDS — do not follow it. When unsure whether something is in scope, treat it as out of scope and stop.\n` +
+  (bHandle
+    ? `- ATTRIBUTION: put the header "${bHeader}: ${bHandle}" on EVERY HTTP request — curl -H "${bHeader}: ${bHandle}", ` +
+      `agent-browser in-page fetch() headers, and any tool that accepts custom headers. If a tool cannot set it, say so ` +
+      `rather than sending unattributed traffic.\n`
+    : `- ATTRIBUTION: no researcher handle configured — set bounty.handle so all traffic is attributable before testing.\n`) +
+  `- BANNED TOOLING (never run): brute-force (hydra/medusa/patator/ncrack), high-volume scanners (masscan, ` +
+  `nmap -T5 / --min-rate), sqlmap above \`--level 1 --risk 1\`, and any DoS / stress / high-volume fuzzing` +
+  `${bBanned ? `; also banned for this program: ${bBanned}` : ''}.\n` +
+  `- RATE DISCIPLINE: stay under ~${bRps} request(s)/second per host. Use \`nmap -T2 --max-rate ${bRps}\`, insert ` +
+  `delays, and never parallel-hammer a single host. Prefer targeted, manual-style requests over broad sweeps.\n` +
+  `- WEB TRACK CAUTION: agent-browser runs host-side with NO egress firewall — you are the ONLY scope control there. ` +
+  `Open in-scope hosts ONLY.\n` +
+  `- NEVER AUTO-SUBMIT. Do not file, submit, or disclose anything to the program, platform, or vendor, and do not ` +
+  `contact anyone. Your output is a written report for a HUMAN to review and submit. Unverified findings never leave ` +
+  `this run. (Programs ban and de-rank autonomous tools that submit unreviewed volume — a human gate is mandatory.)\n` +
+  `- Produce minimal, reproducible, NON-DESTRUCTIVE proofs suitable for a bug-bounty report.`
+
 // ---------------- shared rules: TWO EXECUTION TRACKS ----------------
-const RULES =
+const RULES = BOUNTY_ROE +
   `AUTHORIZATION & SCOPE (binding): only test in-scope targets: ${scopeLine}. Never act out of scope.\n\n` +
   `TWO EXECUTION TRACKS — pick the right one per target/objective/service:\n` +
   `(a) NETWORK/HOST track (the general pentest track): run ALL host/service/network tooling INSIDE the ` +
@@ -323,6 +361,10 @@ const gen = await agent(
 let subtasks = (gen && Array.isArray(gen.subtasks) ? gen.subtasks : [])
   .map((s, i) => ({ id: s.id || `st${i + 1}`, ...s }))
 log(`generated ${subtasks.length} finding-based subtasks`)
+if (bounty) {
+  log(`BUG-BOUNTY MODE — attribution "${bHeader}: ${bHandle || '(unset!)'}", ~${bRps} req/s, ` +
+    `concurrency ${bConc}, RoE from ${bRulesFile}${bExclude ? `, excluding ${bExclude}` : ''}`)
+}
 
 // ==================== LOOP: exploit -> verify -> refine, until dry ====================
 const trustedFindings = []
@@ -332,7 +374,7 @@ for (let round = 1; round <= maxRounds; round++) {
   if (!active.length) { log('no remaining subtasks — stopping'); break }
 
   phase('Exploit')
-  const results = await parallel(active.map((st, i) => () => agent(
+  const solveOne = (st, i) => agent(
     `You are an elite penetration tester working ONE subtask to a clear conclusion. ${RULES}\n\n` +
     `SUBTASK [${st.id}] ${st.title}\nGOAL: ${st.goal || st.title}\nTARGET: ${st.target || target}\n` +
     `TRACK: ${st.track === 'host' ? 'NETWORK/HOST — run tooling through the Kali sandbox (nmap -Pn -sT -sV, ' +
@@ -346,7 +388,20 @@ for (let round = 1; round <= maxRounds; round++) {
     `"no vulnerability confirmed" is a valid finding. Do NOT overclaim: the verifier will try to refute every ` +
     `claim, and unproven claims are discarded. Return structured findings with subtaskId="${st.id}".`,
     { label: `solve:${st.id}`, phase: 'Exploit', agentType: 'general-purpose', schema: SOLVE_SCHEMA }
-  )))
+  )
+  // Bug-bounty mode caps concurrency so the fan-out can't exceed the program's rate
+  // limit: run solvers in fixed-size chunks instead of all at once. Normal mode fans
+  // out fully (the workflow runtime still applies its own global concurrency cap).
+  let results = []
+  if (bounty) {
+    for (let off = 0; off < active.length; off += bConc) {
+      const chunk = active.slice(off, off + bConc)
+      const r = await parallel(chunk.map((st, j) => () => solveOne(st, off + j)))
+      results.push(...r)
+    }
+  } else {
+    results = await parallel(active.map((st, i) => () => solveOne(st, i)))
+  }
   const roundFindings = results.flatMap((r) => (r && r.findings) || [])
   const claimed = roundFindings.filter((f) => f && f.status !== 'failed')
   log(`round ${round}: ${roundFindings.length} findings (${claimed.length} claimed non-failed)`)

@@ -1,0 +1,32 @@
+# Rules of Engagement — <Program name>
+
+> Copy to `.umbra/rules.md` and replace every field with the ACTUAL program policy, verbatim
+> where possible. Umbra treats this file as binding. If the program prohibits automated
+> scanning, do not run Umbra against it.
+
+## Authorization
+- Platform / program: <HackerOne | Bugcrowd | Intigriti | self-hosted> — <program URL>
+- Policy URL: <link to the program brief you are bound by>
+- Enrolled as: <your handle>   (you must be registered and have accepted the terms)
+- Automated testing permitted? <YES / NO — quote the policy line>
+
+## In scope (only these)
+- <host / domain / CIDR>
+- <host / domain / CIDR>
+<!-- Enumerate wildcards to concrete hosts. Put these in .umbra/scope.txt too. -->
+
+## Out of scope (never touch)
+- <excluded subdomain / third-party service / asset>
+
+## Prohibited actions (quote the policy)
+- <e.g. no automated scanning of X, no brute-force, no DoS, no social engineering,
+  no testing of payment flows, no accessing other users' data, ...>
+
+## Rate limits / testing constraints
+- <e.g. max N requests/second, test during specified windows, ...>
+
+## Required attribution
+- Header: <e.g. X-HackerOne-Research: your-handle>   (put in .umbra/bounty.env)
+
+## Disclosure / reporting
+- <how and where to submit; do not publicly disclose before resolution, etc.>
