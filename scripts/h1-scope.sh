@@ -52,10 +52,13 @@ else
   done
 fi
 
-name="$(printf '%s' "$prog" | jq -r '.data.attributes.name // ""')"
-state="$(printf '%s' "$prog" | jq -r '.data.attributes.submission_state // "unknown"')"
-bounties="$(printf '%s' "$prog" | jq -r '.data.attributes.offers_bounties // false')"
-policy="$(printf '%s' "$prog" | jq -r '.data.attributes.policy // "(no policy text returned by the API)"')"
+# The list endpoint wraps each program in .data[]; the single-program detail endpoint
+# returns the resource at top level (.attributes.*). Accept either shape.
+pa='(.data.attributes // .attributes)'
+name="$(printf '%s' "$prog" | jq -r "${pa}.name // \"\"")"
+state="$(printf '%s' "$prog" | jq -r "${pa}.submission_state // \"unknown\"")"
+bounties="$(printf '%s' "$prog" | jq -r "${pa}.offers_bounties // false")"
+policy="$(printf '%s' "$prog" | jq -r "${pa}.policy // \"(no policy text returned by the API)\"")"
 
 mkdir -p .umbra
 
