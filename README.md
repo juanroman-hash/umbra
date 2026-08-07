@@ -182,6 +182,12 @@ printf 'app.example.com\n' >   .umbra/scope.txt      # ONLY explicitly in-scope 
 /pentest-bounty app.example.com
 ```
 
+**HackerOne shortcut.** Instead of hand-copying scope, auto-pull it from the program's
+structured scopes: put your API token in a gitignored `.umbra/h1.env` (see
+`examples/h1.env.example`), then `scripts/h1-scope.sh <program-handle>` writes `.umbra/scope.txt`
+(wildcards commented out to enumerate) and a `.umbra/rules.md` draft. The API can't tell you
+whether automation is permitted — you still read the policy and confirm before running.
+
 > **Authorization is yours to establish, and it is narrow.** A bug bounty authorizes *only* what
 > the program's policy says, *only* while you're enrolled. **Many programs prohibit automated
 > scanning entirely** — if yours does, Umbra must not be pointed at it. There is no public
