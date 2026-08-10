@@ -31,6 +31,16 @@ const PROJECT_DIR = (A.projectDir || A.cwd || '${CLAUDE_PROJECT_DIR}').replace(/
 const SANDBOX = `${PLUGIN_ROOT}/scripts/sandbox.sh`
 const MEM_DIR = `${PROJECT_DIR}/.umbra/memory`
 
+// ---------------- enhancement modules (all optional, self-activating) ----------------
+const OOB_SH = `${PLUGIN_ROOT}/scripts/oob.sh`          // Module A: out-of-band detection
+const WHITEBOX_SH = `${PLUGIN_ROOT}/scripts/whitebox.sh` // Module C: white-box source review
+// OOB mode: 'burp' => use Burp Collaborator via MCP tools; 'interactsh'/'auto'/true => interactsh client.
+const oobMode = typeof A.oob === 'string' ? A.oob.toLowerCase() : (A.oob ? 'auto' : '')
+const oobOn = !!oobMode
+const source = (A.source && typeof A.source === 'object') ? A.source
+             : (typeof A.source === 'string' ? { repo: A.source } : null) // Module C input
+const proxy = (typeof A.proxy === 'string' && A.proxy) ? A.proxy : '' // route web track through Burp (e.g. http://127.0.0.1:8080)
+
 // ---------------- bug-bounty profile (optional) ----------------
 // Passed as A.bounty by commands/pentest-bounty.md. When present the engagement runs
 // under bug-bounty Rules of Engagement: attribution header on all HTTP, banned aggressive
@@ -44,6 +54,30 @@ const bConc = (bounty && Number.isFinite(+bounty.concurrency) && +bounty.concurr
 const bBanned = (bounty && bounty.bannedTools) || ''
 const bExclude = (bounty && bounty.exclude) || ''
 const bRulesFile = (bounty && bounty.rulesFile) || `${PROJECT_DIR}/.umbra/rules.md`
+
+// ---------------- authenticated web session (optional) ----------------
+// When A.authState is set, every agent-browser web-track call loads a saved logged-in
+// browser state (cookies + storage, incl. httpOnly session). A.authStateB enables a second
+// account for cross-tenant / IDOR testing.
+const authState = A.authState || ''
+const authStateB = A.authStateB || ''
+const authUser = A.authUser || 'accountA'
+const authUserB = A.authUserB || 'accountB'
+const AUTH_BLOCK = !authState ? '' :
+  `\n\n=== AUTHENTICATED WEB SESSION (use on ALL agent-browser web-track work) ===\n` +
+  `A logged-in session state for account "${authUser}" is saved at: ${authState}\n` +
+  `Add \`--state ${authState}\` to EVERY agent-browser call (e.g. agent-browser --session <name> --state ${authState} ` +
+  `open https://classroom.github.com/). This restores the authenticated cookies (incl. the httpOnly session cookie) so ` +
+  `you can reach authenticated, state-changing, and multi-tenant/object endpoints — where the real bugs live. After ` +
+  `opening, verify you are logged in (snapshot for the account avatar / an authed-only route) before testing.\n` +
+  (authStateB ? `A SECOND account "${authUserB}" state is at: ${authStateB}. Use ${authUser} vs ${authUserB} to test ` +
+     `IDOR / broken cross-tenant authorization: create or note an object (classroom, assignment, roster, gist, org) as ` +
+     `${authUser}, then from a SEPARATE session loaded with --state ${authStateB} attempt to READ or MODIFY that exact ` +
+     `object id as ${authUserB} (and vice-versa). A confirmed cross-account read/write of another account's private data ` +
+     `is a genuine, reportable finding — capture the request, the object id, and both accounts' responses as proof.\n` : '') +
+  `STILL BINDING: attribution header on every request, low rate, NON-DESTRUCTIVE proofs only, in-scope hosts only. ` +
+  `Operate ONLY on your own two test accounts and objects you create — never read or alter data belonging to any real ` +
+  `third-party user or org.\n`
 
 const BOUNTY_ROE = !bounty ? '' :
   `\n\n=== BUG-BOUNTY RULES OF ENGAGEMENT (BINDING — overrides any speed/aggression guidance) ===\n` +
@@ -75,7 +109,9 @@ const BOUNTY_ROE = !bounty ? '' :
   `- Produce minimal, reproducible, NON-DESTRUCTIVE proofs suitable for a bug-bounty report.`
 
 // ---------------- shared rules: TWO EXECUTION TRACKS ----------------
-const RULES = BOUNTY_ROE +
+// `let` (not const): the optional modules below append OOB + white-box instruction blocks at
+// runtime after their init agents resolve, so recon/solve/verify all inherit them.
+let RULES = BOUNTY_ROE +
   `AUTHORIZATION & SCOPE (binding): only test in-scope targets: ${scopeLine}. Never act out of scope.\n\n` +
   `TWO EXECUTION TRACKS — pick the right one per target/objective/service:\n` +
   `(a) NETWORK/HOST track (the general pentest track): run ALL host/service/network tooling INSIDE the ` +
@@ -92,7 +128,13 @@ const RULES = BOUNTY_ROE +
   `NOTE ON RAW HOST HTTP: this environment may run under context-mode (an external plugin) which can intercept or ` +
   `block raw Bash HTTP (curl / node fetch) on the host shell. umbra makes no guarantee either way. Regardless: ` +
   `run network tooling through the Kali sandbox and web/HTTP testing through agent-browser — do not rely on ad-hoc ` +
-  `host-shell curl.`
+  `host-shell curl.` + AUTH_BLOCK +
+  (proxy ? `\n\n=== PROXY (Burp) ===\nRoute ALL agent-browser web-track traffic through the proxy at ${proxy}: add ` +
+    `\`--proxy "${proxy}" --ignore-https-errors\` to EVERY agent-browser command (open/eval/etc.). The ` +
+    `--ignore-https-errors flag is REQUIRED so Chromium accepts Burp's MITM CA on HTTPS targets (without it, HTTPS ` +
+    `navigation fails). This mirrors all requests into Burp for history/Repeater and Collaborator correlation. Keep ` +
+    `both flags on for every web-track session. If a session was already started without them, run \`agent-browser ` +
+    `--session <name> close\` first, then reopen with the flags.` : '')
 
 // ---------------- schemas ----------------
 const RECON_SCHEMA = {
@@ -292,6 +334,79 @@ const memoryBrief = await agent(
 )
 log('memory: ' + clip(memoryBrief, 160))
 
+// ==================== MODULE C: white-box source prep (optional) ====================
+// If args.source is given, clone/point at the source read-only and add a variant-analysis
+// instruction so recon + solvers do source-level review, not just black-box probing.
+if (source && source.repo) {
+  const WB_SCHEMA = {
+    type: 'object',
+    properties: { path: { type: 'string', description: 'absolute read-only source path' },
+                  info: { type: 'string', description: 'the whitebox.sh info inventory verbatim' } },
+    required: ['path'],
+  }
+  const wb = await agent(
+    `Prepare white-box source for review. Run these EXACTLY and report the results:\n` +
+    `  path="$(bash "${WHITEBOX_SH}" prepare ${JSON.stringify(source.repo)}${source.ref ? ' ' + JSON.stringify(source.ref) : ''})"\n` +
+    `  echo "PATH=$path"\n  bash "${WHITEBOX_SH}" info "$path"\n` +
+    `Return the absolute source path and the info inventory verbatim. If the clone failed, say so honestly.`,
+    { label: 'whitebox:prep', phase: 'Recon', agentType: 'general-purpose', schema: WB_SCHEMA }
+  )
+  if (wb && wb.path) {
+    log('whitebox: ' + wb.path)
+    RULES += `\n\n=== WHITE-BOX SOURCE (read-only) ===\n` +
+      `The target's source is checked out at: ${wb.path}\nInventory:\n${clip(wb.info || '', 600)}\n` +
+      `Use Read/Grep/Glob on that path for source-level review. When you find a vulnerable pattern (sink, missing ` +
+      `authz check, unsafe deserialization, injection, secret), do VARIANT ANALYSIS: grep the WHOLE tree for sibling ` +
+      `occurrences of the same pattern and report each. Map source-identified issues to live endpoints for ` +
+      `non-destructive confirmation. NEVER modify the source.`
+  }
+}
+
+// ==================== MODULE A: out-of-band (OOB) init (optional) ====================
+let oobBackend = 'none', oobDomain = ''
+if (oobMode === 'burp') {
+  // Burp Collaborator via MCP — no init agent needed; the MCP tools are session-connected.
+  oobBackend = 'burp'
+  log('oob: backend=burp (Burp Collaborator via MCP)')
+} else if (oobOn) {
+  const OOB_SCHEMA = {
+    type: 'object',
+    properties: { backend: { type: 'string', enum: ['burp', 'interactsh', 'none'] },
+                  domain: { type: 'string', description: 'base OOB domain if interactsh, else empty' } },
+    required: ['backend'],
+  }
+  const oi = await agent(
+    `Initialize out-of-band (OOB) interaction detection. Run EXACTLY:\n` +
+    `  bash "${OOB_SH}" ensure >&2 || true\n` +
+    `  backend="$(bash "${OOB_SH}" backend)"\n` +
+    `  domain=""; if [ "$backend" = "interactsh" ]; then domain="$(bash "${OOB_SH}" start 2>/dev/null || true)"; fi\n` +
+    `  echo "backend=$backend"; echo "domain=$domain"\n` +
+    `Report the backend (burp|interactsh|none) and the base OOB domain if one was produced. Do NOT fabricate a ` +
+    `domain — if backend is none or start produced nothing, report backend=none (OOB stays off).`,
+    { label: 'oob:init', phase: 'Recon', agentType: 'general-purpose', schema: OOB_SCHEMA }
+  )
+  oobBackend = (oi && oi.backend) || 'none'
+  oobDomain = (oi && oi.domain) || ''
+  if (oobBackend === 'interactsh' && !oobDomain) oobBackend = 'none' // no domain => unusable
+}
+{
+  if (oobBackend !== 'none') {
+    log(`oob: backend=${oobBackend}${oobDomain ? ' domain=' + oobDomain : ''}`)
+    RULES += `\n\n=== OUT-OF-BAND (OOB) DETECTION — backend: ${oobBackend} ===\n` +
+      (oobBackend === 'interactsh'
+        ? `Base OOB domain: ${oobDomain}. For ANY blind/OOB-suspect sink (SSRF, XXE, blind XSS, blind SQLi/RCE, ` +
+          `open-redirect-to-internal, webhook/callback/url params), inject a UNIQUE payload subdomain ` +
+          `\`<marker>.${oobDomain}\` (marker ties it to the subtask, e.g. ssrf-<id>). After injecting, poll: ` +
+          `\`bash "${OOB_SH}" poll <marker>\`. A returned HIT (dns/http from the target) is HARD PROOF — capture it.\n`
+        : `Burp Collaborator is available via MCP tools (load them with ToolSearch "select:mcp__burp__generate_collaborator_payload,mcp__burp__get_collaborator_interactions"). ` +
+          `For ANY blind/OOB-suspect sink (SSRF, XXE, blind XSS, blind SQLi/RCE, open-redirect-to-internal, webhook/callback/url params): ` +
+          `(1) call mcp__burp__generate_collaborator_payload to get a unique payload host + payloadId; (2) inject that host into the sink ` +
+          `via your track; (3) call mcp__burp__get_collaborator_interactions with the payloadId. A returned DNS/HTTP/SMTP interaction ` +
+          `from the target is HARD PROOF of the blind vuln — capture the interaction (type, clientIp, timestamp) as evidence.\n`) +
+      `Inject OOB payloads ONLY into in-scope targets.`
+  }
+}
+
 // ==================== RECON: fingerprint + classify + component inventory ====================
 const recon = await agent(
   `You are an elite recon specialist. OBJECTIVE: ${objective}. Primary target: ${target}. ${RULES}\n\n` +
@@ -422,7 +537,21 @@ for (let round = 1; round <= maxRounds; round++) {
       `(not a WAF banner, version-only inference, or a coincidental error page); (2) if cheap and in-scope, ` +
       `REPRODUCE it — network/host findings via \`bash "${SANDBOX}" exec "<cmd>"\`, web findings via agent-browser ` +
       `(session "verify_r${round}"). Mark real=false when uncertain — a discarded true finding is recoverable, a ` +
-      `shipped false positive is not.\n\nCLAIMED FINDINGS:\n${summarizeFindings(claimed)}`,
+      `shipped false positive is not.\n\n` +
+      `EXECUTION-BASED VERIFICATION (require a concrete ARTIFACT, not plausibility — this is the bar):\n` +
+      `- XSS => confirm the JS ACTUALLY EXECUTED in agent-browser (a unique marker written to the DOM / a beacon), ` +
+      `not just that the payload was reflected.\n` +
+      `- Blind SSRF / XXE / blind RCE / blind SQLi / internal open-redirect => require an OUT-OF-BAND HIT` +
+      (oobBackend === 'interactsh'
+        ? `: re-inject a unique \`<marker>.${oobDomain}\` payload and run \`bash "${OOB_SH}" poll <marker>\`; only a ` +
+          `returned HIT confirms it.`
+        : oobBackend === 'burp'
+        ? ` via Burp Collaborator MCP: mcp__burp__generate_collaborator_payload -> inject -> mcp__burp__get_collaborator_interactions; only a returned interaction confirms it.`
+        : ` — if no OOB backend is available, you CANNOT confirm a blind finding; mark it real=false (unconfirmable).`) + `\n` +
+      `- SQLi => a boolean/time DIFFERENTIAL you executed (not an error string alone).\n` +
+      `- IDOR / broken authz => a two-identity DIFF: the object is readable/writable as identity B when it must not be.\n` +
+      `A finding WITHOUT such an execution artifact is real=false. Note the artifact in your reason.\n\n` +
+      `CLAIMED FINDINGS:\n${summarizeFindings(claimed)}`,
       { label: `verify:r${round}`, phase: 'Verify', agentType: 'general-purpose', schema: VERIFY_SCHEMA }
     )
     const confirmed = (verified.verified || []).filter((v) => v && v.real)

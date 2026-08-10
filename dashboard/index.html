@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Umbra — live engagement</title>
+<style>
+  :root{
+    --bg:#0d1117; --panel:#161b22; --border:#30363d; --fg:#e6edf3; --dim:#8b949e;
+    --accent:#58a6ff; --run:#d29922; --ok:#3fb950; --bad:#6e7681; --crit:#f85149;
+    --high:#db6d28; --med:#d29922; --low:#3fb950; --info:#6e7681;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font:13px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace;background:var(--bg);color:var(--fg)}
+  header{display:flex;gap:16px;align-items:center;padding:10px 16px;background:var(--panel);border-bottom:1px solid var(--border);position:sticky;top:0;z-index:5}
+  header .title{font-weight:700;color:var(--accent);letter-spacing:.5px}
+  header .kv{color:var(--dim)} header .kv b{color:var(--fg);font-weight:600}
+  .dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;vertical-align:middle}
+  .grid{display:grid;grid-template-columns:1.1fr 1.3fr;grid-template-rows:auto auto;gap:12px;padding:12px}
+  .panel{background:var(--panel);border:1px solid var(--border);border-radius:8px;display:flex;flex-direction:column;min-height:220px;max-height:calc(50vh - 30px)}
+  .panel h2{margin:0;padding:8px 12px;font-size:12px;text-transform:uppercase;letter-spacing:.6px;color:var(--dim);border-bottom:1px solid var(--border);display:flex;justify-content:space-between}
+  .panel .body{overflow:auto;padding:8px 12px}
+  .phase{margin:6px 0 2px;color:var(--accent);font-size:11px;text-transform:uppercase;letter-spacing:.5px}
+  .agent{display:flex;align-items:center;gap:8px;padding:2px 0}
+  .agent .role{flex:1} .agent .el{color:var(--dim);font-size:11px}
+  .running{background:var(--run)} .done{background:var(--ok)} .pending{background:var(--bad)}
+  .find{border:1px solid var(--border);border-radius:6px;padding:8px;margin-bottom:8px;background:#0f141b}
+  .find .top{display:flex;gap:8px;align-items:center}
+  .find .sev{font-size:10px;padding:1px 6px;border-radius:10px;color:#0d1117;font-weight:700;text-transform:uppercase}
+  .sev.critical{background:var(--crit)}.sev.high{background:var(--high)}.sev.medium{background:var(--med)}.sev.low{background:var(--low)}.sev.info,.sev.none{background:var(--info);color:#e6edf3}
+  .find .st{font-size:10px;padding:1px 6px;border-radius:10px;border:1px solid var(--border);text-transform:uppercase}
+  .st.CONFIRMED{color:var(--ok);border-color:var(--ok)} .st.REJECTED{color:var(--dim)} .st.CLAIMED{color:var(--run);border-color:var(--run)} .st.FAILED{color:var(--bad)}
+  .find .title{flex:1;font-weight:600} .find .meta{color:var(--dim);font-size:11px;margin-top:4px;white-space:pre-wrap;word-break:break-word}
+  .art{display:flex;justify-content:space-between;padding:3px 0;cursor:pointer;border-bottom:1px dotted #21262d}
+  .art:hover{color:var(--accent)} .art .sz{color:var(--dim);font-size:11px}
+  table.burp{width:100%;border-collapse:collapse} .burp td{padding:1px 6px 1px 0;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:200px} .burp td.code{color:var(--fg)}
+  .sub{color:var(--dim);font-size:11px;margin:4px 0}
+  .hit{color:var(--crit)} .empty{color:var(--dim);font-style:italic;padding:6px 0}
+  #modal{position:fixed;inset:0;background:rgba(0,0,0,.7);display:none;align-items:center;justify-content:center;z-index:10}
+  #modal .box{background:var(--panel);border:1px solid var(--border);border-radius:8px;max-width:900px;max-height:85vh;width:90%;overflow:auto;padding:20px}
+  #modal pre{white-space:pre-wrap;word-break:break-word} #modal h1,#modal h2,#modal h3{color:var(--accent)}
+  #modal .x{float:right;cursor:pointer;color:var(--dim)}
+</style>
+</head>
+<body>
+<header>
+  <span class="title">◢ UMBRA</span>
+  <span class="kv">run <b id="run">—</b></span>
+  <span class="kv">target <b id="target">—</b></span>
+  <span class="kv"><span id="conn" class="dot pending"></span><b id="conntxt">connecting</b></span>
+  <span class="kv" style="margin-left:auto">agents <b id="acount">0</b> · findings <b id="fcount">0</b> · burp <b id="btxt">offline</b></span>
+</header>
+<div class="grid">
+  <section class="panel"><h2>Agents <span id="phaseNow"></span></h2><div class="body" id="agents"></div></section>
+  <section class="panel"><h2>Findings</h2><div class="body" id="findings"><div class="empty">none yet</div></div></section>
+  <section class="panel"><h2>Artifacts</h2><div class="body" id="artifacts"><div class="empty">none yet</div></div></section>
+  <section class="panel"><h2>Burp <span id="burpstate" class="sub"></span></h2><div class="body" id="burp"></div></section>
+</div>
+<div id="modal"><div class="box"><span class="x" onclick="closeModal()">✕ close</span><div id="modalbody"></div></div></div>
+<script>
+const PHASES=['Recon','Plan','Exploit','Verify','Refine','Report']
+let S={agents:{},findings:[],artifacts:[],burp:{},run:null,target:''}
+const $=id=>document.getElementById(id)
+function el(t,c,txt){const e=document.createElement(t);if(c)e.className=c;if(txt!=null)e.textContent=txt;return e}
+function ago(ms){if(!ms)return'';const s=Math.floor((Date.now()-ms)/1000);return s<60?s+'s':Math.floor(s/60)+'m'+(s%60)+'s'}
+
+function renderAgents(){
+  const box=$('agents');box.innerHTML='';const byPhase={}
+  for(const a of Object.values(S.agents)){(byPhase[a.phase]=byPhase[a.phase]||[]).push(a)}
+  let running=null
+  for(const ph of PHASES){const list=byPhase[ph];if(!list||!list.length)continue
+    box.appendChild(el('div','phase',ph))
+    for(const a of list){const row=el('div','agent')
+      row.appendChild(el('span','dot '+a.status))
+      row.appendChild(el('span','role',a.role))
+      row.appendChild(el('span','el',a.status==='running'?ago(a.started):(a.ended?((a.ended-a.started)/1000|0)+'s':'')))
+      box.appendChild(row);if(a.status==='running')running=ph}}
+  $('acount').textContent=Object.keys(S.agents).length
+  $('phaseNow').className='sub';$('phaseNow').textContent=running?('▶ '+running):''
+}
+function renderFindings(){
+  const box=$('findings');box.innerHTML=''
+  if(!S.findings.length){box.appendChild(el('div','empty','none yet'));return}
+  const order=f=>({CONFIRMED:0,CLAIMED:1,'':2,REJECTED:3,FAILED:4}[f.status]??2)
+  for(const f of [...S.findings].sort((a,b)=>order(a)-order(b))){
+    const c=el('div','find');const top=el('div','top')
+    top.appendChild(el('span','sev '+(f.severity||'info'),f.severity||'info'))
+    top.appendChild(el('span','title',f.title))
+    if(f.status)top.appendChild(el('span','st '+f.status,f.status))
+    c.appendChild(top)
+    const meta=(f.target?('› '+f.target+'\n'):'')+(f.reason?('✓ '+f.reason+'\n'):'')+(f.evidence||'')
+    if(meta.trim())c.appendChild(el('div','meta',meta.slice(0,500)))
+    box.appendChild(c)}
+  $('fcount').textContent=S.findings.length
+}
+function renderArtifacts(){
+  const box=$('artifacts');box.innerHTML=''
+  if(!S.artifacts.length){box.appendChild(el('div','empty','none yet'));return}
+  for(const a of S.artifacts){const row=el('div','art')
+    row.appendChild(el('span','nm',a.name))
+    row.appendChild(el('span','sz',a.dir?'dir':(a.size<1024?a.size+'b':(a.size/1024|0)+'k')))
+    if(!a.dir&&/\.(md|txt|json|env)$/i.test(a.name))row.onclick=()=>openArtifact(a.path,a.name)
+    box.appendChild(row)}
+}
+function renderBurp(){
+  const b=S.burp||{};const box=$('burp');box.innerHTML=''
+  $('btxt').textContent=b.online?('proxy '+(b.proxyCount||0)):'offline'
+  $('burpstate').textContent=b.online?'online':'offline'
+  if(!b.online){box.appendChild(el('div','empty','Burp not reachable on 127.0.0.1:9876'));return}
+  if(b.collab&&b.collab.length){box.appendChild(el('div','sub','⚡ Collaborator OOB hits'))
+    for(const c of b.collab)box.appendChild(el('div','hit',`${c.type}  ${c.ip}  ${c.ts}`))}
+  if(b.issues&&b.issues.length){box.appendChild(el('div','sub','Scanner issues'))
+    for(const i of b.issues)box.appendChild(el('div',null,`[${i.severity}] ${i.name} ${i.host}`))}
+  box.appendChild(el('div','sub','Proxy — in-scope ('+(b.proxyCount||0)+')'+(b.proxyOther?('  ·  '+b.proxyOther+' off-scope hidden'):'')))
+  const t=el('table','burp')
+  for(const r of (b.proxyRecent||[]).slice(0,20)){const tr=document.createElement('tr')
+    const td=(x,c)=>{const d=el('td',c,x);tr.appendChild(d)}
+    td(r.method);td(r.host);td(r.path);td(r.code,'code');t.appendChild(tr)}
+  box.appendChild(t)
+}
+function openArtifact(p,name){
+  fetch('/artifact?path='+encodeURIComponent(p)).then(r=>r.text()).then(txt=>{
+    $('modalbody').innerHTML='';const h=el('div');h.appendChild(el('div','sub',name))
+    if(/\.md$/i.test(name)){h.innerHTML+=md(txt)}else{h.appendChild(el('pre',null,txt))}
+    $('modalbody').appendChild(h);$('modal').style.display='flex'})
+}
+function closeModal(){$('modal').style.display='none'}
+function esc(s){return s.replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))}
+function md(t){return esc(t)
+  .replace(/^### (.*)$/gm,'<h3>$1</h3>').replace(/^## (.*)$/gm,'<h2>$1</h2>').replace(/^# (.*)$/gm,'<h1>$1</h1>')
+  .replace(/^\s*[-*] (.*)$/gm,'• $1<br>').replace(/`([^`]+)`/g,'<code>$1</code>')
+  .replace(/\*\*([^*]+)\*\*/g,'<b>$1</b>').replace(/\n{2,}/g,'<br><br>').replace(/\n/g,'<br>')}
+
+function apply(msg){
+  if(msg.type==='snapshot'){S=msg.data;$('run').textContent=S.run?S.run.id:'—';$('target').textContent=S.target||'—';renderAgents();renderFindings();renderArtifacts();renderBurp();return}
+  if(msg.type==='run'){S.run=msg.data;$('run').textContent=S.run.id;S.agents={};S.findings=[];renderAgents();renderFindings();return}
+  if(msg.type==='agent'){S.agents[msg.data.id]=msg.data;renderAgents();return}
+  if(msg.type==='findings'){S.findings=msg.data;renderFindings();return}
+  if(msg.type==='artifacts'){S.artifacts=msg.data;renderArtifacts();return}
+  if(msg.type==='burp'){S.burp=msg.data;renderBurp();return}
+}
+function connect(){
+  const es=new EventSource('/events')
+  es.onopen=()=>{$('conn').className='dot done';$('conntxt').textContent='live'}
+  es.onerror=()=>{$('conn').className='dot running';$('conntxt').textContent='reconnecting'}
+  es.onmessage=e=>{try{apply(JSON.parse(e.data))}catch(_){}}
+}
+setInterval(renderAgents,1000) // refresh running elapsed timers
+connect()
+</script>
+</body>
+</html>

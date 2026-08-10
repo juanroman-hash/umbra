@@ -160,6 +160,46 @@ printf 'app.example.com\n' > .umbra/scope.txt   # one authorized host/CIDR per l
 You can also drive an engagement manually with the `pentest-orchestration` and
 `pentest-reporting` skills instead of the workflow.
 
+## Enhancements (v0.5.0)
+
+Three optional, self-activating modules raise finding precision and coverage. Default behaviour is
+unchanged unless you opt in. Burp is optional throughout.
+
+- **Execution-based verification (always on).** The verifier now demands a concrete execution
+  artifact before trusting a finding: XSS must actually execute JS, blind SSRF/XXE/RCE/SQLi need an
+  out-of-band hit, SQLi needs a boolean/time differential, IDOR needs a two-identity diff.
+  Plausible-but-unproven findings are dropped.
+- **Out-of-band detection** (`oob`) — `scripts/oob.sh`. Detects blind SSRF/XXE/RCE/blind-XSS.
+  - `oob: "burp"` — use **Burp Collaborator** via the [Burp MCP server](https://github.com/PortSwigger/mcp-server)
+    (`mcp__burp__generate_collaborator_payload` / `get_collaborator_interactions`). Requires Burp Pro.
+  - `oob: "interactsh"` — self-hosted/cloud interactsh: set `UMBRA_OOB_SERVER` (+ optional
+    `UMBRA_OOB_TOKEN`). The free public OAST servers are deprecated, so a server is required.
+  - Omitted → OOB stays dormant.
+- **White-box source review** (`source: { repo, ref }`) — `scripts/whitebox.sh`. Shallow-clones the
+  target's source read-only and adds variant analysis (find a bug, then sweep the tree for siblings).
+- **Burp proxy** (`proxy: "http://127.0.0.1:8080"`). Routes all agent-browser web-track traffic
+  through Burp (adds `--proxy … --ignore-https-errors`) for history/Repeater/Collaborator visibility.
+
+Example (workflow args):
+
+```json
+{ "target": "app.example.com", "scope": ["app.example.com"],
+  "oob": "burp", "proxy": "http://127.0.0.1:8080",
+  "source": { "repo": "https://github.com/org/app.git", "ref": "main" } }
+```
+
+## Live dashboard (`dashboard/`)
+
+A local, read-only, zero-dependency dashboard streams a running engagement to the browser: agent
+progress by phase, findings as they verify (CLAIMED → CONFIRMED/REJECTED), artifacts from `.umbra/`,
+and live Burp activity (proxy history filtered to scope, Collaborator hits, scanner issues).
+
+```bash
+node dashboard/server.js   # then open http://127.0.0.1:7878
+```
+
+Auto-discovers the newest run and follows it. Binds `127.0.0.1` only; never touches the target.
+
 ## Bug bounty mode
 
 `/pentest-bounty` runs an engagement under bug-bounty **Rules of Engagement** — for testing a
